@@ -104,7 +104,7 @@
       transform: scale(1.05);
     }
 
-    /* Start & Game Over Overlay */
+    /* Start & Game Over 2D Overlay (Web Browser View) */
     #overlay {
       position: absolute;
       top: 0;
@@ -319,6 +319,12 @@
     let highScore = localStorage.getItem('red_triplane_high_score') || 0;
     let propAngle = 0;
 
+    // VR Flight Control State Variables
+    let vrClimb = false;
+    let vrDescend = false;
+    let vrLeft = false;
+    let vrRight = false;
+
     // Obstacle Pool
     const obstacles = [
       { id: 'obs1',  type: 'balloon', x: 22, baseY: 9.5,  baseZ: -3.5, y: 9.5,  z: -3.5, phase: 0,   speed: 0.095, minLevel: 1, passed: false },
@@ -350,11 +356,6 @@
       if (keyCodesToPrevent.includes(e.code)) e.preventDefault();
       keys[e.code] = false;
     });
-
-    // VR Controls Event Listeners
-    window.addEventListener('triggerdown', () => { if (!gameActive && !isExploding) startGame(); });
-    window.addEventListener('abuttondown', () => { if (!gameActive && !isExploding) startGame(); });
-    window.addEventListener('xbuttondown', () => { if (!gameActive && !isExploding) startGame(); });
 
     function showToast(msg) {
       const toast = document.getElementById('toast-banner');
@@ -516,8 +517,12 @@
         updateBalloonTether(obs);
       });
 
+      // Hide both 2D Overlay and 3D VR Panel
       const overlay = document.getElementById('overlay');
       if (overlay) overlay.style.display = 'none';
+
+      const vrPanel = document.getElementById('vr-menu-panel');
+      if (vrPanel) vrPanel.setAttribute('visible', 'false');
 
       gameActive = true;
     }
@@ -531,6 +536,7 @@
         localStorage.setItem('red_triplane_high_score', highScore);
       }
 
+      // Update 2D HTML Overlay
       const titleText = document.getElementById('title-text');
       const descText = document.getElementById('desc-text');
       const startBtn = document.getElementById('start-btn');
@@ -542,23 +548,39 @@
       if (descText) descText.innerHTML = `Your triplane exploded in combat!<br>Final Score: <b>${score}</b> | Reached Level: <b>${currentLevel}</b> | Personal Best: <b>${highScore}</b>`;
       if (startBtn) startBtn.innerText = "FLY AGAIN";
       if (overlay) overlay.style.display = 'flex';
+
+      // Update 3D VR Panel
+      const vrTitle = document.getElementById('vr-title-text');
+      const vrDesc = document.getElementById('vr-desc-text');
+      const vrPanel = document.getElementById('vr-menu-panel');
+
+      if (vrTitle) vrTitle.setAttribute('value', 'CRASHED!');
+      if (vrDesc) vrDesc.setAttribute('value', `Final Score: ${score} | Level: ${currentLevel}\nBest Score: ${highScore}\n\nPress Trigger / A / X to Fly Again`);
+      if (vrPanel) vrPanel.setAttribute('visible', 'true');
     }
 
-    document.addEventListener('DOMContentLoaded', () => {
-      const startBtn = document.getElementById('start-btn');
-      if (startBtn) {
-        startBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          startGame();
-        });
-        startBtn.addEventListener('touchstart', (e) => {
-          e.stopPropagation();
-          startGame();
-        });
-      }
-    });
-
+    // A-Frame Custom Component for Quest 3 Controller Thumbsticks & Buttons
     if (typeof AFRAME !== 'undefined') {
+      AFRAME.registerComponent('quest-controls', {
+        init: function () {
+          this.el.addEventListener('thumbstickmoved', (e) => {
+            if (e.detail.y < -0.25) { vrClimb = true; vrDescend = false; }
+            else if (e.detail.y > 0.25) { vrDescend = true; vrClimb = false; }
+            else { vrClimb = false; vrDescend = false; }
+
+            if (e.detail.x < -0.25) { vrLeft = true; vrRight = false; }
+            else if (e.detail.x > 0.25) { vrRight = true; vrLeft = false; }
+            else { vrLeft = false; vrRight = false; }
+          });
+
+          const triggerStart = () => { if (!gameActive && !isExploding) startGame(); };
+          this.el.addEventListener('triggerdown', triggerStart);
+          this.el.addEventListener('abuttondown', triggerStart);
+          this.el.addEventListener('xbuttondown', triggerStart);
+          this.el.addEventListener('gripdown', triggerStart);
+        }
+      });
+
       AFRAME.registerComponent('flappy-game', {
         init: function() {
           this.gameTime = 0;
@@ -567,13 +589,9 @@
           if (highVal) highVal.innerText = highScore;
           updateLevelDisplay();
 
-          // Sync VR Headset Tracking with Cockpit Height in WebXR
           this.el.sceneEl.addEventListener('enter-vr', () => {
             const cameraEl = document.querySelector('a-camera');
-            if (cameraEl) {
-              cameraEl.setAttribute('position', '0 0 0');
-            }
-            if (!gameActive && !isExploding) startGame();
+            if (cameraEl) cameraEl.setAttribute('position', '0 0 0');
           });
         },
         tick: function () {
@@ -600,33 +618,18 @@
             return;
           }
 
-          // Meta Quest 3 Controller Polling via WebXR Gamepad API
-          let vrClimb = false;
-          let vrDescend = false;
-          let vrLeft = false;
-          let vrRight = false;
-
+          // Fallback WebXR Gamepad Polling
           if (navigator.getGamepads) {
             const gamepads = navigator.getGamepads();
             for (let i = 0; i < gamepads.length; i++) {
               const gp = gamepads[i];
               if (gp && gp.axes && gp.axes.length >= 2) {
-                // Read primary thumbstick axes (Axis 2/3 on WebXR Touch Controllers, 0/1 on standard mapping)
-                const axisX = gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0];
-                const axisY = gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1];
-
+                const axisX = gp.axes[0];
+                const axisY = gp.axes[1];
                 if (axisY < -0.25) vrClimb = true;
                 if (axisY > 0.25) vrDescend = true;
                 if (axisX < -0.25) vrLeft = true;
                 if (axisX > 0.25) vrRight = true;
-
-                if (gp.buttons) {
-                  for (let b = 0; b < gp.buttons.length; b++) {
-                    if (gp.buttons[b] && gp.buttons[b].pressed) {
-                      if (!gameActive && !isExploding) startGame();
-                    }
-                  }
-                }
               }
             }
           }
@@ -764,6 +767,14 @@
         }
       });
     }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const startBtn = document.getElementById('start-btn');
+      if (startBtn) {
+        startBtn.addEventListener('click', (e) => { e.stopPropagation(); startGame(); });
+        startBtn.addEventListener('touchstart', (e) => { e.stopPropagation(); startGame(); });
+      }
+    });
   </script>
 </head>
 <body>
@@ -780,24 +791,24 @@
 
   <div id="toast-banner">⚡ LEVEL UP! ⚡</div>
 
-  <!-- Start / Game Over Overlay -->
+  <!-- Start / Game Over Overlay (Web Browser 2D Mode) -->
   <div id="overlay">
     <h1 id="title-text">FPV RED TRIPLANE 3D</h1>
     <p id="desc-text">
       <b>KEYBOARD:</b> <b>W/S</b> = Pitch Altitude | <b>A/D</b> = Dodge Roll<br>
-      <b>META QUEST 3:</b> <b>Left/Right Thumbsticks</b> = 3D Flight | <b>Trigger / A / X</b> = Start<br>
+      <b>META QUEST 3:</b> <b>Thumbstick</b> = Flight | <b>Trigger / A / X</b> = Start<br>
       <span class="legend">⚠️ BARRAGE BALLOONS are elevated with collidable tethers! ⚠️</span><br>
       <i>Score 20 points per <b>LEVEL</b> to face denser enemy formations!</i>
     </p>
     <button id="start-btn" onclick="startGame()">START GAME</button>
   </div>
 
-  <!-- A-Frame Scene with Meta Quest 3 WebXR Display & DOM Overlay Configuration -->
-  <a-scene flappy-game vr-mode-ui="enabled: true" webxr="optionalFeatures: dom-overlay, hit-test, local-floor; overlayElement: #overlay">
+  <!-- A-Frame Scene -->
+  <a-scene flappy-game vr-mode-ui="enabled: true">
     
-    <!-- Meta Quest 3 Touch Controllers -->
-    <a-entity id="left-controller" oculus-touch-controls="hand: left" laser-controls="hand: left"></a-entity>
-    <a-entity id="right-controller" oculus-touch-controls="hand: right" laser-controls="hand: right"></a-entity>
+    <!-- Meta Quest 3 Controllers with custom quest-controls component -->
+    <a-entity id="left-controller" oculus-touch-controls="hand: left" quest-controls></a-entity>
+    <a-entity id="right-controller" oculus-touch-controls="hand: right" quest-controls laser-controls="hand: right"></a-entity>
 
     <!-- Sky & Lighting -->
     <a-sky color="#7ec0ee"></a-sky>
@@ -822,9 +833,21 @@
     <!-- PLAYER RED TRIPLANE ENTITY -->
     <a-entity id="triplane" position="-3 8 0">
       
-      <!-- FPV PILOT CAMERA POSITION AT Y = -1.0 -->
-      <a-entity position="0 .3 0" rotation="0 -90 0">
-        <a-camera position="0 0 0" near="0.001" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false"></a-camera>
+      <!-- FPV PILOT CAMERA POSITION -->
+      <a-entity position="0 -1.0 0" rotation="0 -90 0">
+        <a-camera position="0 0 0" near="0.001" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
+          
+          <!-- 3D VR START & DEATH UI MENU PANEL (Visible in Meta Quest 3 Headset) -->
+          <a-entity id="vr-menu-panel" position="0 0 -1.8" visible="true">
+            <a-plane width="2.4" height="1.5" color="#0a0a14" material="opacity: 0.92; transparent: true"></a-plane>
+            <a-text id="vr-title-text" value="FPV RED TRIPLANE 3D" align="center" position="0 0.45 0.02" width="3.2" color="#ff3333" font="kelsonsans"></a-text>
+            <a-text id="vr-desc-text" value="USE THUMBSTICK TO FLY\n\nPRESS TRIGGER / A / X TO START" align="center" position="0 -0.05 0.02" width="2.0" color="#ffffff"></a-text>
+            <a-plane position="0 -0.48 0.02" width="1.6" height="0.32" color="#ff3333">
+              <a-text value="PRESS TRIGGER TO START" align="center" position="0 0 0.02" width="1.8" color="#ffffff"></a-text>
+            </a-plane>
+          </a-entity>
+
+        </a-camera>
       </a-entity>
 
       <!-- Red Triplane Geometry Model -->
