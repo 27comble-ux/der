@@ -24,7 +24,7 @@
       background-color: #7ec0ee;
     }
 
-    /* Unified Top-Center Tactical HUD Bar */
+    /* Unified Top-Center Tactical HUD Bar (Browser Mode) */
     #hud-container {
       position: absolute;
       top: 16px;
@@ -60,7 +60,7 @@
       color: #ffaa00;
     }
 
-    /* Floating Toast Banner */
+    /* Floating Toast Banner (Browser Mode) */
     #toast-banner {
       position: absolute;
       top: 75px;
@@ -104,7 +104,7 @@
       transform: scale(1.05);
     }
 
-    /* Start & Game Over 2D Overlay (Web Browser View) */
+    /* Start & Game Over Overlay (Web Browser View) */
     #overlay {
       position: absolute;
       top: 0;
@@ -319,11 +319,9 @@
     let highScore = localStorage.getItem('red_triplane_high_score') || 0;
     let propAngle = 0;
 
-    // VR Flight Control State Variables
-    let vrClimb = false;
-    let vrDescend = false;
-    let vrLeft = false;
-    let vrRight = false;
+    // Smooth Analog VR Control State (-1.0 to 1.0)
+    let vrAxisX = 0;
+    let vrAxisY = 0;
 
     // Obstacle Pool
     const obstacles = [
@@ -357,18 +355,49 @@
       keys[e.code] = false;
     });
 
+    let toastTimeout = null;
     function showToast(msg) {
+      // 2D Browser Toast
       const toast = document.getElementById('toast-banner');
       if (toast) {
         toast.innerText = msg;
         toast.style.display = 'block';
-        setTimeout(() => { toast.style.display = 'none'; }, 2200);
       }
+
+      // 3D VR Toast
+      const vrToast = document.getElementById('vr-toast-text');
+      if (vrToast) {
+        vrToast.setAttribute('value', msg);
+        vrToast.setAttribute('visible', 'true');
+      }
+
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => {
+        if (toast) toast.style.display = 'none';
+        if (vrToast) vrToast.setAttribute('visible', 'false');
+      }, 2200);
     }
 
     function updateLevelDisplay() {
       const lvlVal = document.getElementById('level-val');
       if (lvlVal) lvlVal.innerText = currentLevel;
+
+      const vrLvl = document.getElementById('vr-hud-level');
+      if (vrLvl) vrLvl.setAttribute('value', `LVL: ${currentLevel}`);
+    }
+
+    function updateScoreDisplay() {
+      const scoreVal = document.getElementById('score-val');
+      if (scoreVal) scoreVal.innerText = score;
+
+      const vrScore = document.getElementById('vr-hud-score');
+      if (vrScore) vrScore.setAttribute('value', `SCORE: ${score}`);
+
+      const highVal = document.getElementById('high-val');
+      if (highVal) highVal.innerText = highScore;
+
+      const vrBest = document.getElementById('vr-hud-best');
+      if (vrBest) vrBest.setAttribute('value', `BEST: ${highScore}`);
     }
 
     function resetObstacle(obs, startX) {
@@ -497,13 +526,10 @@
       score = 0;
       currentLevel = 1;
       isExploding = false;
+      vrAxisX = 0;
+      vrAxisY = 0;
 
-      const scoreVal = document.getElementById('score-val');
-      if (scoreVal) scoreVal.innerText = '0';
-
-      const highVal = document.getElementById('high-val');
-      if (highVal) highVal.innerText = highScore;
-
+      updateScoreDisplay();
       updateLevelDisplay();
 
       const planeModel = document.getElementById('triplane-model');
@@ -517,7 +543,7 @@
         updateBalloonTether(obs);
       });
 
-      // Hide both 2D Overlay and 3D VR Panel
+      // Hide both 2D Overlay and 3D VR Menu Panel
       const overlay = document.getElementById('overlay');
       if (overlay) overlay.style.display = 'none';
 
@@ -536,20 +562,20 @@
         localStorage.setItem('red_triplane_high_score', highScore);
       }
 
+      updateScoreDisplay();
+
       // Update 2D HTML Overlay
       const titleText = document.getElementById('title-text');
       const descText = document.getElementById('desc-text');
       const startBtn = document.getElementById('start-btn');
       const overlay = document.getElementById('overlay');
-      const highVal = document.getElementById('high-val');
 
-      if (highVal) highVal.innerText = highScore;
       if (titleText) titleText.innerText = "CRASHED!";
       if (descText) descText.innerHTML = `Your triplane exploded in combat!<br>Final Score: <b>${score}</b> | Reached Level: <b>${currentLevel}</b> | Personal Best: <b>${highScore}</b>`;
       if (startBtn) startBtn.innerText = "FLY AGAIN";
       if (overlay) overlay.style.display = 'flex';
 
-      // Update 3D VR Panel
+      // Update 3D VR Panel inside Headset
       const vrTitle = document.getElementById('vr-title-text');
       const vrDesc = document.getElementById('vr-desc-text');
       const vrPanel = document.getElementById('vr-menu-panel');
@@ -563,14 +589,18 @@
     if (typeof AFRAME !== 'undefined') {
       AFRAME.registerComponent('quest-controls', {
         init: function () {
+          // Smooth Thumbstick Polling with Deadzone & Reduced Sensitivity
           this.el.addEventListener('thumbstickmoved', (e) => {
-            if (e.detail.y < -0.25) { vrClimb = true; vrDescend = false; }
-            else if (e.detail.y > 0.25) { vrDescend = true; vrClimb = false; }
-            else { vrClimb = false; vrDescend = false; }
+            let rawX = e.detail.x;
+            let rawY = e.detail.y;
 
-            if (e.detail.x < -0.25) { vrLeft = true; vrRight = false; }
-            else if (e.detail.x > 0.25) { vrRight = true; vrLeft = false; }
-            else { vrLeft = false; vrRight = false; }
+            // Apply 15% Deadzone
+            if (Math.abs(rawX) < 0.15) rawX = 0;
+            if (Math.abs(rawY) < 0.15) rawY = 0;
+
+            // Proportional smooth scaling
+            vrAxisX = rawX;
+            vrAxisY = rawY;
           });
 
           const triggerStart = () => { if (!gameActive && !isExploding) startGame(); };
@@ -585,8 +615,7 @@
         init: function() {
           this.gameTime = 0;
           spawnTrees();
-          const highVal = document.getElementById('high-val');
-          if (highVal) highVal.innerText = highScore;
+          updateScoreDisplay();
           updateLevelDisplay();
 
           this.el.sceneEl.addEventListener('enter-vr', () => {
@@ -618,18 +647,16 @@
             return;
           }
 
-          // Fallback WebXR Gamepad Polling
+          // WebXR Gamepad API Fallback
           if (navigator.getGamepads) {
             const gamepads = navigator.getGamepads();
             for (let i = 0; i < gamepads.length; i++) {
               const gp = gamepads[i];
               if (gp && gp.axes && gp.axes.length >= 2) {
-                const axisX = gp.axes[0];
-                const axisY = gp.axes[1];
-                if (axisY < -0.25) vrClimb = true;
-                if (axisY > 0.25) vrDescend = true;
-                if (axisX < -0.25) vrLeft = true;
-                if (axisX > 0.25) vrRight = true;
+                let rawX = gp.axes[0];
+                let rawY = gp.axes[1];
+                if (Math.abs(rawX) > 0.15) vrAxisX = rawX;
+                if (Math.abs(rawY) > 0.15) vrAxisY = rawY;
               }
             }
           }
@@ -640,7 +667,6 @@
 
           const plane = document.getElementById('triplane');
           const prop = document.getElementById('propeller');
-          const scoreVal = document.getElementById('score-val');
 
           // Scroll forest
           const forest = document.getElementById('forest-container');
@@ -660,20 +686,29 @@
           let targetPitch = 0;
           let targetRoll = 0;
 
-          if (keys['KeyW'] || keys['ArrowUp'] || vrClimb) {
+          // Keyboard or Proportional VR Controls Input
+          if (keys['KeyW'] || keys['ArrowUp']) {
             planeY += flySpeed;
             targetPitch = 18;
-          } else if (keys['KeyS'] || keys['ArrowDown'] || vrDescend) {
+          } else if (keys['KeyS'] || keys['ArrowDown']) {
             planeY -= flySpeed;
             targetPitch = -18;
+          } else if (Math.abs(vrAxisY) > 0.15) {
+            // Proportional dampened VR pitch speed (negative thumbstick Y = climb)
+            planeY -= vrAxisY * flySpeed * 0.65;
+            targetPitch = -vrAxisY * 20;
           }
 
-          if (keys['KeyA'] || keys['ArrowLeft'] || vrLeft) {
+          if (keys['KeyA'] || keys['ArrowLeft']) {
             planeZ -= flySpeed * 1.1;
             targetRoll = -25;
-          } else if (keys['KeyD'] || keys['ArrowRight'] || vrRight) {
+          } else if (keys['KeyD'] || keys['ArrowRight']) {
             planeZ += flySpeed * 1.1;
             targetRoll = 25;
+          } else if (Math.abs(vrAxisX) > 0.15) {
+            // Proportional dampened VR roll speed
+            planeZ += vrAxisX * flySpeed * 0.75;
+            targetRoll = vrAxisX * 28;
           }
 
           updateEngineSound(targetPitch !== 0 ? 0.8 : 0);
@@ -735,7 +770,7 @@
               obs.passed = true;
               score++;
               playChimeSound();
-              if (scoreVal) scoreVal.innerText = score;
+              updateScoreDisplay();
               checkLevelProgression();
             }
 
@@ -779,7 +814,7 @@
 </head>
 <body>
 
-  <!-- Top-Center HUD Bar -->
+  <!-- Top-Center HUD Bar (2D Desktop Mode) -->
   <div id="hud-container">
     <div id="score-box">
       <div>SCORE: <span id="score-val">0</span></div>
@@ -796,7 +831,7 @@
     <h1 id="title-text">FPV RED TRIPLANE 3D</h1>
     <p id="desc-text">
       <b>KEYBOARD:</b> <b>W/S</b> = Pitch Altitude | <b>A/D</b> = Dodge Roll<br>
-      <b>META QUEST 3:</b> <b>Thumbstick</b> = Flight | <b>Trigger / A / X</b> = Start<br>
+      <b>META QUEST 3:</b> <b>Thumbstick</b> = Smooth Flight | <b>Trigger / A / X</b> = Start<br>
       <span class="legend">⚠️ BARRAGE BALLOONS are elevated with collidable tethers! ⚠️</span><br>
       <i>Score 20 points per <b>LEVEL</b> to face denser enemy formations!</i>
     </p>
@@ -837,7 +872,18 @@
       <a-entity position="0 -1.0 0" rotation="0 -90 0">
         <a-camera position="0 0 0" near="0.001" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
           
-          <!-- 3D VR START & DEATH UI MENU PANEL (Visible in Meta Quest 3 Headset) -->
+          <!-- 3D VR HEADS-UP DISPLAY (HUD) IN QUEST 3 HEADSET -->
+          <a-entity id="vr-hud" position="0 0.42 -1.2">
+            <a-plane width="1.6" height="0.18" color="#0a0a14" material="opacity: 0.85; transparent: true">
+              <a-text id="vr-hud-score" value="SCORE: 0" align="left" position="-0.7 0 0.01" width="1.8" color="#ffffff" font="kelsonsans"></a-text>
+              <a-text id="vr-hud-level" value="LVL: 1" align="center" position="0 0 0.01" width="1.8" color="#00e5ff" font="kelsonsans"></a-text>
+              <a-text id="vr-hud-best" value="BEST: 0" align="right" position="0.7 0 0.01" width="1.8" color="#ffaa00" font="kelsonsans"></a-text>
+            </a-plane>
+            <!-- 3D VR Toast Banner Text -->
+            <a-text id="vr-toast-text" value="" align="center" position="0 -0.16 0.01" width="2.2" color="#00e5ff" font="kelsonsans" visible="false"></a-text>
+          </a-entity>
+
+          <!-- 3D VR START & DEATH UI MENU PANEL -->
           <a-entity id="vr-menu-panel" position="0 0 -1.8" visible="true">
             <a-plane width="2.4" height="1.5" color="#0a0a14" material="opacity: 0.92; transparent: true"></a-plane>
             <a-text id="vr-title-text" value="FPV RED TRIPLANE 3D" align="center" position="0 0.45 0.02" width="3.2" color="#ff3333" font="kelsonsans"></a-text>
