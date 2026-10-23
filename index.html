@@ -84,8 +84,8 @@
       100% { transform: translateX(-50%) scale(1.0); opacity: 1; }
     }
 
-    /* Sound Toggle Button */
-    #audio-btn {
+    /* HUD Buttons */
+    #audio-btn, #invert-btn {
       pointer-events: auto;
       background: rgba(15, 15, 22, 0.88);
       border: 2px solid #444466;
@@ -99,7 +99,7 @@
       box-shadow: 0 4px 12px rgba(0,0,0,0.4);
     }
 
-    #audio-btn:hover {
+    #audio-btn:hover, #invert-btn:hover {
       border-color: #ff3333;
       transform: scale(1.05);
     }
@@ -309,6 +309,23 @@
     let isExploding = false;
     let explosionTimer = 0;
 
+    let invertPitch = false; // false = standard, true = inverted
+
+    function toggleInvertPitch(e) {
+      if (e) e.stopPropagation();
+      invertPitch = !invertPitch;
+      
+      const textLabel = invertPitch ? "PITCH: INVERTED" : "PITCH: NORMAL";
+      
+      // Update 2D button
+      const btn2d = document.getElementById('invert-btn');
+      if (btn2d) btn2d.innerText = textLabel;
+
+      // Update 3D VR button
+      const btn3d = document.getElementById('vr-invert-text');
+      if (btn3d) btn3d.setAttribute('value', textLabel);
+    }
+
     let planeY = 8.0;
     let planeZ = 0.0;
     let currentPitch = 0;
@@ -429,6 +446,7 @@
       }
     }
 
+    // Spawn Non-Colliding Trees Across Landscape AND Inside Central Combat Zone
     function spawnTrees() {
       const scene = document.querySelector('a-scene');
       if (!scene) return;
@@ -439,32 +457,42 @@
       treeContainer = document.createElement('a-entity');
       treeContainer.setAttribute('id', 'forest-container');
 
-      for (let i = 0; i < 70; i++) {
+      // Generate 110 non-colliding decorative floor trees
+      for (let i = 0; i < 110; i++) {
         const tree = document.createElement('a-entity');
         const x = -30 + Math.random() * 220;
-        const side = Math.random() > 0.5 ? 1 : -1;
-        const z = side * (7.5 + Math.random() * 50);
-        const scale = 0.6 + Math.random() * 0.7;
+        
+        let z;
+        // 65% of trees scattered directly on floor of central combat zone (Z = -5.2 to +5.2)
+        if (i < 72) {
+          z = -5.2 + Math.random() * 10.4;
+        } else {
+          // 35% scattered in outer landscape
+          const side = Math.random() > 0.5 ? 1 : -1;
+          z = side * (7.0 + Math.random() * 45.0);
+        }
+
+        const scale = 0.45 + Math.random() * 0.55;
 
         tree.setAttribute('position', `${x} 1.0 ${z}`);
         tree.setAttribute('scale', `${scale} ${scale} ${scale}`);
 
         const trunk = document.createElement('a-cylinder');
         trunk.setAttribute('position', '0 0.8 0');
-        trunk.setAttribute('radius', '0.25');
+        trunk.setAttribute('radius', '0.22');
         trunk.setAttribute('height', '1.6');
         trunk.setAttribute('color', '#4a2e12');
 
         const cone1 = document.createElement('a-cone');
         cone1.setAttribute('position', '0 2.2 0');
-        cone1.setAttribute('radius-bottom', '1.2');
+        cone1.setAttribute('radius-bottom', '1.1');
         cone1.setAttribute('radius-top', '0.1');
         cone1.setAttribute('height', '1.8');
         cone1.setAttribute('color', '#1e4620');
 
         const cone2 = document.createElement('a-cone');
         cone2.setAttribute('position', '0 3.2 0');
-        cone2.setAttribute('radius-bottom', '0.9');
+        cone2.setAttribute('radius-bottom', '0.8');
         cone2.setAttribute('radius-top', '0.05');
         cone2.setAttribute('height', '1.5');
         cone2.setAttribute('color', '#2a5a2d');
@@ -512,7 +540,7 @@
       if (newLevel > currentLevel) {
         currentLevel = newLevel;
         updateLevelDisplay();
-        showToast(`⚡ LEVEL ${currentLevel}! SQUADRON SPREAD INCREASED! ⚡`);
+        showToast(`⚡ LEVEL ${currentLevel}! ENEMY SPREAD INCREASED! ⚡`);
         playBonusSound();
       }
     }
@@ -598,7 +626,6 @@
             if (Math.abs(rawX) < 0.15) rawX = 0;
             if (Math.abs(rawY) < 0.15) rawY = 0;
 
-            // Proportional smooth scaling
             vrAxisX = rawX;
             vrAxisY = rawY;
           });
@@ -608,6 +635,12 @@
           this.el.addEventListener('abuttondown', triggerStart);
           this.el.addEventListener('xbuttondown', triggerStart);
           this.el.addEventListener('gripdown', triggerStart);
+
+          // Register VR Invert Button Click Listener
+          const vrInvertBtn = document.getElementById('vr-invert-btn');
+          if (vrInvertBtn) {
+            vrInvertBtn.addEventListener('click', toggleInvertPitch);
+          }
         }
       });
 
@@ -668,7 +701,7 @@
           const plane = document.getElementById('triplane');
           const prop = document.getElementById('propeller');
 
-          // Scroll forest
+          // Scroll forest and check tree collisions
           const forest = document.getElementById('forest-container');
           if (forest) {
             const treeEls = forest.children;
@@ -677,6 +710,17 @@
               tPos.x -= 0.095;
               if (tPos.x < -30) tPos.x += 220;
               treeEls[t].setAttribute('position', tPos);
+
+              // Tree Collision Check
+              if (Math.abs(tPos.x - (-3)) < 0.8 && Math.abs(planeZ - tPos.z) < 0.8) {
+                const scaleAttr = treeEls[t].getAttribute('scale');
+                const scaleY = scaleAttr ? scaleAttr.y : 0.8;
+                const treeTopY = 1.0 + (3.2 * scaleY); // Calculates tree height from base Y=1.0
+                if (planeY <= treeTopY) {
+                  triggerExplosion();
+                  return;
+                }
+              }
             }
           }
 
@@ -686,17 +730,19 @@
           let targetPitch = 0;
           let targetRoll = 0;
 
+          // Pitch inversion factor
+          const pitchFactor = invertPitch ? -1 : 1;
+
           // Keyboard or Proportional VR Controls Input
           if (keys['KeyW'] || keys['ArrowUp']) {
-            planeY += flySpeed;
-            targetPitch = 18;
+            planeY += flySpeed * pitchFactor;
+            targetPitch = 18 * pitchFactor;
           } else if (keys['KeyS'] || keys['ArrowDown']) {
-            planeY -= flySpeed;
-            targetPitch = -18;
+            planeY -= flySpeed * pitchFactor;
+            targetPitch = -18 * pitchFactor;
           } else if (Math.abs(vrAxisY) > 0.15) {
-            // Proportional dampened VR pitch speed (negative thumbstick Y = climb)
-            planeY -= vrAxisY * flySpeed * 0.65;
-            targetPitch = -vrAxisY * 20;
+            planeY -= vrAxisY * flySpeed * 0.65 * pitchFactor;
+            targetPitch = -vrAxisY * 20 * pitchFactor;
           }
 
           if (keys['KeyA'] || keys['ArrowLeft']) {
@@ -706,7 +752,6 @@
             planeZ += flySpeed * 1.1;
             targetRoll = 25;
           } else if (Math.abs(vrAxisX) > 0.15) {
-            // Proportional dampened VR roll speed
             planeZ += vrAxisX * flySpeed * 0.75;
             targetRoll = vrAxisX * 28;
           }
@@ -821,6 +866,7 @@
       <div>LVL: <span id="level-val" class="hud-highlight">1</span></div>
       <div>BEST: <span id="high-val" class="hud-label">0</span></div>
     </div>
+    <button id="invert-btn" onclick="toggleInvertPitch(event)">PITCH: NORMAL</button>
     <button id="audio-btn" onclick="toggleSound()">🔊 AUDIO: ON</button>
   </div>
 
@@ -832,7 +878,7 @@
     <p id="desc-text">
       <b>KEYBOARD:</b> <b>W/S</b> = Pitch Altitude | <b>A/D</b> = Dodge Roll<br>
       <b>META QUEST 3:</b> <b>Thumbstick</b> = Smooth Flight | <b>Trigger / A / X</b> = Start<br>
-      <span class="legend">⚠️ BARRAGE BALLOONS are elevated with collidable tethers! ⚠️</span><br>
+      <span class="legend">⚠️ Watch out for trees and barrage balloons below! ⚠️</span><br>
       <i>Score 20 points per <b>LEVEL</b> to face denser enemy formations!</i>
     </p>
     <button id="start-btn" onclick="startGame()">START GAME</button>
@@ -854,11 +900,11 @@
     <a-plane position="50 1.0 0" rotation="-90 0 0" width="350" height="200" color="#3a5f0b"></a-plane>
 
     <!-- Translucent Sky Limit Plane (Y = 13.0) -->
-    <a-plane position="50 13.0 0" rotation="90 0 0" width="350" height="200" material="color: #ffffff; transparent: true; opacity: 0.35; side: double"></a-plane>
+    <a-plane position="50 13.0 0" rotation="90 0 0" width="350" height="11.8" material="color: #ff2222; transparent: true; opacity: 0.35; side: double"></a-plane>
 
     <!-- Translucent Side Corridor Boundary Walls (Z = -6.0 and Z = +6.0) -->
-    <a-plane position="50 7.0 -6.0" rotation="0 0 0" width="350" height="12" material="color: #ff3333; transparent: true; opacity: 0.12; side: double"></a-plane>
-    <a-plane position="50 7.0 6.0" rotation="0 0 0" width="350" height="12" material="color: #ff3333; transparent: true; opacity: 0.12; side: double"></a-plane>
+    <a-plane position="50 7.0 -5.9" rotation="0 0 0" width="350" height="12" material="color: #ff3333; transparent: true; opacity: 0.15; side: double"></a-plane>
+    <a-plane position="50 7.0 5.9" rotation="0 0 0" width="350" height="12" material="color: #ff3333; transparent: true; opacity: 0.15; side: double"></a-plane>
 
     <!-- Background Clouds -->
     <a-sphere position="10 18 -18" radius="5" color="#ffffff"></a-sphere>
@@ -869,14 +915,14 @@
     <a-entity id="triplane" position="-3 8 0">
       
       <!-- FPV PILOT CAMERA POSITION -->
-      <a-entity position="0 -1.0 0" rotation="0 -90 0">
+      <a-entity position="0 .3 0" rotation="0 -90 0">
         <a-camera position="0 0 0" near="0.001" look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
           
           <!-- 3D VR HEADS-UP DISPLAY (HUD) IN QUEST 3 HEADSET -->
           <a-entity id="vr-hud" position="0 0.42 -1.2">
             <a-plane width="1.6" height="0.18" color="#0a0a14" material="opacity: 0.85; transparent: true">
               <a-text id="vr-hud-score" value="SCORE: 0" align="left" position="-0.7 0 0.01" width="1.8" color="#ffffff" font="kelsonsans"></a-text>
-              <a-text id="vr-hud-level" value="LVL: 1" align="center" position="0 0 0.01" width="1.8" color="#00e5ff" font="kelsonsans"></a-text>
+              <a-text id="vr-hud-level" value="LVL: 1" align="center" position="0 0 0.01" width="1.8" color="#ff003c" font="kelsonsans"></a-text>
               <a-text id="vr-hud-best" value="BEST: 0" align="right" position="0.7 0 0.01" width="1.8" color="#ffaa00" font="kelsonsans"></a-text>
             </a-plane>
             <!-- 3D VR Toast Banner Text -->
@@ -885,10 +931,16 @@
 
           <!-- 3D VR START & DEATH UI MENU PANEL -->
           <a-entity id="vr-menu-panel" position="0 0 -1.8" visible="true">
-            <a-plane width="2.4" height="1.5" color="#0a0a14" material="opacity: 0.92; transparent: true"></a-plane>
-            <a-text id="vr-title-text" value="FPV RED TRIPLANE 3D" align="center" position="0 0.45 0.02" width="3.2" color="#ff3333" font="kelsonsans"></a-text>
-            <a-text id="vr-desc-text" value="USE THUMBSTICK TO FLY\n\nPRESS TRIGGER / A / X TO START" align="center" position="0 -0.05 0.02" width="2.0" color="#ffffff"></a-text>
-            <a-plane position="0 -0.48 0.02" width="1.6" height="0.32" color="#ff3333">
+            <a-plane width="2.4" height="1.6" color="#0a0a14" material="opacity: 0.92; transparent: true"></a-plane>
+            <a-text id="vr-title-text" value="FPV RED TRIPLANE 3D" align="center" position="0 0.5 0.02" width="3.2" color="#ff3333" font="kelsonsans"></a-text>
+            <a-text id="vr-desc-text" value="USE THUMBSTICK TO FLY\n\nPRESS TRIGGER / A / X TO START" align="center" position="0 0.1 0.02" width="2.0" color="#ffffff"></a-text>
+            
+            <!-- 3D VR Invert Pitch Button -->
+            <a-plane id="vr-invert-btn" position="0 -0.22 0.02" width="1.5" height="0.22" color="#333333" class="raycastable">
+              <a-text id="vr-invert-text" value="PITCH: NORMAL" align="center" position="0 0 0.01" width="1.6" color="#00e5ff" font="kelsonsans"></a-text>
+            </a-plane>
+
+            <a-plane position="0 -0.52 0.02" width="1.6" height="0.28" color="#ff3333">
               <a-text value="PRESS TRIGGER TO START" align="center" position="0 0 0.02" width="1.8" color="#ffffff"></a-text>
             </a-plane>
           </a-entity>
